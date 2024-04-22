@@ -4716,6 +4716,83 @@ class SQLQuerySuite extends QueryTest with SharedSparkSession with AdaptiveSpark
     val df6 = df3.join(df2, col("df3.zaak_id") === col("df2.customer_id"), "outer")
     df5.crossJoin(df6)
   }
+
+  test("SPARK-47939: Describe should work with parameterized queries") {
+    checkAnswer(
+      spark.sql("describe select ?", Array(1)),
+      Array(
+        Row("1", "int", null)
+      )
+    )
+  }
+
+  test("SPARK-47939: Explain should work with parameterized queries") {
+    def checkQueryPlan(query: String, params: Array[_], plan: String): Unit = assert(
+        spark
+          .sql(query, params)
+          .collect()
+          .map(_.getString(0))
+          .map(normalizePlanRepresentation)
+          .sameElements(Array(plan))
+      )
+
+    def normalizePlanRepresentation(repr: String): String =
+      repr.replaceAll("Project \\[1 AS 1#[0-9]+\\]", "Project [1 AS 1#N]")
+
+    checkQueryPlan(
+      "explain select ?",
+      Array(1),
+              """== Physical Plan ==
+*(1) Project [1 AS 1#N]
++- *(1) Scan OneRowRelation[]
+
+"""
+    )
+    checkQueryPlan(
+      "explain explain explain select ?",
+      Array(1),
+              """== Physical Plan ==
+Execute ExplainCommand
+   +- ExplainCommand SimpleMode, false
+      +- ExplainCommand SimpleMode, false
+         +- Project [1 AS 1#N]
+            +- OneRowRelation
+
+"""
+    )
+    checkQueryPlan(
+      "explain extended select ?",
+      Array(1),
+              """== Parsed Logical Plan ==
+Project [1 AS 1#N]
++- OneRowRelation
+
+== Analyzed Logical Plan ==
+1: int
+Project [1 AS 1#N]
++- OneRowRelation
+
+== Optimized Logical Plan ==
+Project [1 AS 1#N]
++- OneRowRelation
+
+== Physical Plan ==
+*(1) Project [1 AS 1#N]
++- *(1) Scan OneRowRelation[]
+"""
+    )
+    checkQueryPlan(
+      "explain describe select ?",
+      Array(1),
+              """== Physical Plan ==
+Execute DescribeQueryCommand
+   +- DescribeQueryCommand select ?
+      +- Project [1 AS 1#N]
+         +- OneRowRelation
+
+"""
+    )
+  }
 }
 
 case class Foo(bar: Option[String])

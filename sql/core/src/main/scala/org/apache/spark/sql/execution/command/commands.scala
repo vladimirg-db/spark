@@ -23,9 +23,10 @@ import scala.util.control.NonFatal
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.{CatalystTypeConverters, InternalRow}
+import org.apache.spark.sql.catalyst.analysis.AnalysisContext
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference}
 import org.apache.spark.sql.catalyst.plans.QueryPlan
-import org.apache.spark.sql.catalyst.plans.logical.{Command, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical.{AnalysisOnlyCommand, Command, LogicalPlan}
 import org.apache.spark.sql.catalyst.trees.LeafLike
 import org.apache.spark.sql.connector.ExternalCommandRunner
 import org.apache.spark.sql.execution.{CommandExecutionMode, ExplainMode, LeafExecNode, SparkPlan, UnaryExecNode}
@@ -156,8 +157,9 @@ case class DataWritingCommandExec(cmd: DataWritingCommand, child: SparkPlan)
  */
 case class ExplainCommand(
     logicalPlan: LogicalPlan,
-    mode: ExplainMode)
-  extends LeafRunnableCommand {
+    mode: ExplainMode,
+    isAnalyzed: Boolean = false)
+  extends RunnableCommand with AnalysisOnlyCommand {
 
   override val output: Seq[Attribute] =
     Seq(AttributeReference("plan", StringType, nullable = true)())
@@ -171,6 +173,16 @@ case class ExplainCommand(
     ("Error occurred during query planning: \n" + cause.getMessage).split("\n")
       .map(Row(_)).toImmutableArraySeq
   }
+
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[LogicalPlan]): ExplainCommand = {
+    assert(!isAnalyzed)
+    copy(logicalPlan = newChildren.head)
+  }
+
+  override def childrenToAnalyze: Seq[LogicalPlan] = logicalPlan :: Nil
+
+  def markAsAnalyzed(analysisContext: AnalysisContext): LogicalPlan = copy(isAnalyzed = true)
 }
 
 /** An explain command for users to see how a streaming batch is executed. */

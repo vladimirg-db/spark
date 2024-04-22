@@ -28,13 +28,14 @@ import org.apache.hadoop.fs.permission.{AclEntry, AclEntryScope, AclEntryType, F
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.catalyst.{SQLConfHelper, TableIdentifier}
-import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
+import org.apache.spark.sql.catalyst.analysis.{AnalysisContext, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.catalog._
 import org.apache.spark.sql.catalyst.catalog.CatalogTableType._
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.DescribeCommandSchema
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.trees.LeafLike
 import org.apache.spark.sql.catalyst.util.{escapeSingleQuotedString, quoteIfNeeded, CaseInsensitiveMap, CharVarcharUtils, DateTimeUtils, ResolveDefaultColumns}
 import org.apache.spark.sql.catalyst.util.ResolveDefaultColumns.CURRENT_DEFAULT_COLUMN_METADATA_KEY
 import org.apache.spark.sql.connector.catalog.CatalogV2Implicits.TableIdentifierHelper
@@ -590,7 +591,7 @@ case class TruncateTableCommand(
   }
 }
 
-abstract class DescribeCommandBase extends LeafRunnableCommand {
+abstract class DescribeCommandBase extends RunnableCommand {
   protected def describeSchema(
       schema: StructType,
       buffer: ArrayBuffer[Row],
@@ -608,6 +609,7 @@ abstract class DescribeCommandBase extends LeafRunnableCommand {
     buffer += Row(column, dataType, comment)
   }
 }
+
 /**
  * Command that looks like
  * {{{
@@ -619,7 +621,7 @@ case class DescribeTableCommand(
     partitionSpec: TablePartitionSpec,
     isExtended: Boolean,
     override val output: Seq[Attribute])
-  extends DescribeCommandBase {
+  extends DescribeCommandBase with LeafLike[LogicalPlan] {
 
   override def run(sparkSession: SparkSession): Seq[Row] = {
     val result = new ArrayBuffer[Row]
@@ -759,8 +761,8 @@ case class DescribeTableCommand(
  *    select * from (from a select * select *)
  * 7. Common table expressions (CTEs)
  */
-case class DescribeQueryCommand(queryText: String, plan: LogicalPlan)
-  extends DescribeCommandBase with CTEInChildren {
+case class DescribeQueryCommand(queryText: String, plan: LogicalPlan, isAnalyzed: Boolean = false)
+  extends DescribeCommandBase with AnalysisOnlyCommand with CTEInChildren {
 
   override val output = DescribeCommandSchema.describeTableAttributes()
 
@@ -772,6 +774,16 @@ case class DescribeQueryCommand(queryText: String, plan: LogicalPlan)
     describeSchema(queryExecution.analyzed.schema, result, header = false)
     result.toSeq
   }
+
+  override protected def withNewChildrenInternal(
+      newChildren: IndexedSeq[LogicalPlan]): DescribeQueryCommand = {
+    assert(!isAnalyzed)
+    copy(plan = newChildren.head)
+  }
+
+  override def childrenToAnalyze: Seq[LogicalPlan] = plan :: Nil
+
+  def markAsAnalyzed(analysisContext: AnalysisContext): LogicalPlan = copy(isAnalyzed = true)
 
   override def withCTEDefs(cteDefs: Seq[CTERelationDef]): LogicalPlan = {
     copy(plan = WithCTE(plan, cteDefs))
