@@ -299,7 +299,7 @@ object SQLConf {
       )
       .version("4.0.0")
       .booleanConf
-      .createWithDefault(true)
+      .createWithDefault(Utils.isTesting)
 
   val ANALYZER_SINGLE_PASS_RESOLVER_RELATION_BRIDGING_ENABLED =
     buildConf("spark.sql.analyzer.singlePassResolver.relationBridging.enabled")
